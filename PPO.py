@@ -13,7 +13,7 @@ from tensorflow.keras.losses import mean_squared_error, CategoricalCrossentropy
 
 NN_HIDDEN_SIZE = 64  # hidden size of neurons layers
 LR = 1e-4  # learning rate
-EPS_CLIP = 0.2  # clipping value
+EPS_CLIP = 0.2  # clipping term
 CRITIC_FACTOR = 0.5  # factor applied to critic loss in total loss computation
 ENTROPY_B = 1e-3  # entropy factor in loss calculation
 GAMMA = 0.99  # discount factor
@@ -219,8 +219,8 @@ class Trainer:
                 else:
                     observation = next_observation
             # train models
-            self.algo.train_step()
-            self.algo.memory.forget()
+            self.agent.train_step()
+            self.agent.memory.forget()
 
         self.env.close()
 
