@@ -3,11 +3,20 @@ import numpy as np
 import gym
 import tensorflow as tf
 import tensorflow_probability as tfp
+from collections import deque
 from tensorflow.keras import Model
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Input, Activation
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import mean_squared_error, CategoricalCrossentropy
+
+
+NN_HIDDEN_SIZE = 64  # hidden size of neurons layers
+LR = 1e-4  # learning rate
+EPS_CLIP = 0.2  # clipping value
+CRITIC_FACTOR = 0.5  # factor applied to critic loss in total loss computation
+ENTROPY_B = 1e-3  # entropy factor in loss calculation
+GAMMA = 0.99  # discount factor
 
 
 class Memory:
@@ -26,7 +35,7 @@ class Memory:
         self.dones.clear()
         self.logits.clear()
 
-    def memorize(self, state, action, reward, done, logits):
+    def remember(self, state, action, reward, done, logits):
         'Apend lists into memory'
         self.states.append(state)
         self.actions.append(action)
@@ -34,12 +43,9 @@ class Memory:
         self.dones.append(done)
         self.logits.append(logits)
 
-    def get_states(self):
-        return np.array(self.states)
-
     def get_states_rewards_dones(self):
         '! states are returned as np array'
-        return self.get_states(), self.rewards, self.dones
+        return np.array(self.states), self.rewards, self.dones
 
     def get_states_logits_actions_rewards_tensors(self):
         return (tf.convert_to_tensor(self.states, dtype=tf.float32),
@@ -52,22 +58,22 @@ class ActorCritic(tf.keras.Model):
     def __init__(self, num_actions, hidden_size):
         super().__init__('mlp_policy')
 
-        #Actor
+        # Actor
         self.hidden11 = Dense(hidden_size, activation='relu', name='h11')
         self.hidden12 = Dense(hidden_size, activation='relu', name='h12')
-        self.action = Dense(num_actions, name="action", activation="softmax") 
+        self.action = Dense(num_actions, name="action", activation="softmax")
 
-        #Critic
+        # Critic
         self.hidden21 = Dense(hidden_size, activation='relu', name='h21')
-        self.hidden22 = Dense(hidden_size, activation='relu', name='h22')        
-        self.value = Dense(1, name='value', activation="tanh") 
+        self.hidden22 = Dense(hidden_size, activation='relu', name='h22')
+        self.value = Dense(1, name='value', activation="tanh")
 
     def call(self, x):
-        #Actor
+        # Actor
         hidden_logs = self.hidden11(x)
         hidden_logs = self.hidden12(hidden_logs)
 
-        #Critic
+        # Critic
         hidden_vals = self.hidden21(x)
         hidden_vals = self.hidden22(hidden_vals)
 
@@ -99,15 +105,15 @@ class ActorCritic(tf.keras.Model):
         return action_logprobs, values, dist_entropy
 
 
-class PPO():
-    def __init__(self, num_actions, hidden_size=64, lr=1e-4, gamma=0.99, eps_clip=0.2, critic_discount=0.5, entropy_b=1e-3):
-        self.gamma = gamma
-        self.eps_clip = eps_clip
-        self.critic_discount = critic_discount
-        self.entropy_b = entropy_b
+class PPO_Agent():
+    def __init__(self, num_actions):
+        self.gamma = GAMMA
+        self.eps_clip = EPS_CLIP
+        self.critic_factor = CRITIC_FACTOR
+        self.entropy_b = ENTROPY_B
         self.memory = Memory()
-        self.model = ActorCritic(num_actions, hidden_size)
-        self.optimizer = Adam(lr=lr)
+        self.model = ActorCritic(num_actions, NN_HIDDEN_SIZE)
+        self.optimizer = Adam(lr=LR)
 
     def train_step(self, nb_epochs=16):
         states, oldpolicy_probs, actions, rewards = self.memory.get_states_logits_actions_rewards_tensors()
@@ -125,7 +131,7 @@ class PPO():
                 critic_loss = tf.keras.losses.mean_squared_error(
                     values, rewards)
 
-                total_loss = self.critic_discount * critic_loss + \
+                total_loss = self.critic_factor * critic_loss + \
                     actor_loss - self.entropy_b * dist_entropy
 
             gradients = tape.gradient(
@@ -142,7 +148,7 @@ class PPO():
         return -tf.math.reduce_mean(tf.math.minimum(surr1, surr2))
 
     def get_advantages(self):
-        states = self.memory.get_states()
+        states, _, _ = self.memory.get_states_rewards_dones()
         _, _, est_values = self.model.actions_logits_values(states)
         true_values = self.get_returns()
 
@@ -173,11 +179,11 @@ class PPO():
         return (returns - returns.mean()) / (returns.std() + 1e-8)
 
 
-class Cartpole:
+class Trainer:
 
-    def __init__(self, algo):
-        self.env = gym.make('CartPole-v1')
-        self.algo = algo
+    def __init__(self, env, agent):
+        self.env = env
+        self.agent = agent
 
     def train(self, nb_episodes=1000, nb_steps=128):
         all_rewards, current_rewards = [], []
@@ -186,11 +192,11 @@ class Cartpole:
 
         while finished_games <= nb_episodes:
             for _step in range(nb_steps):
-                self.env.render()
-                action, logits = self.algo.choose_action(observation)
+                # self.env.render()
+                action, logits = self.agent.choose_action(observation)
 
                 next_observation, reward, done, _ = self.env.step(action)
-                self.algo.memory.memorize(
+                self.agent.memory.remember(
                     observation, action, reward, done, logits)
                 current_rewards.append(reward)
 
@@ -220,6 +226,7 @@ class Cartpole:
 
 
 if __name__ == "__main__":
-    algo = PPO(num_actions=2)  # 0: left - 1: right
-    cartpole = Cartpole(algo)
-    cartpole.train()
+    agent = PPO_Agent(num_actions=2)  # 0: left / 1: right
+    env = gym.make('CartPole-v1')
+    trainer = Trainer(env, agent)
+    trainer.train()
